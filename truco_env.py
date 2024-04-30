@@ -32,7 +32,7 @@ class TrucoAgent:
     """
     Classe do agente com ações default aleatórias
     """
-
+    
     def __init__(self, name):
         self.name = name
         self.cards = []
@@ -200,7 +200,6 @@ class TrucoMineiroEnv(gym.Env):
             else:
                 self.current_bet -= 2
             reward = -self.current_bet
-            self.game_score[self.current_player] -= self.current_bet
             self.game_score[self.other_player] += self.current_bet
             done = any(x >= 12 for x in self.game_score)
             self.reset(reset_score=False)
@@ -222,9 +221,9 @@ class TrucoMineiroEnv(gym.Env):
             self.current_bet += 2
         # Current não pode mais pedir/aumentar truco
         self.trucable[self.current_player] = False
-        # Se alguém já for ganhar o jogo com a aposta atual, other não pode mais aumentar 
-        sum_score_bet = [(self.current_bet + score) for score in self.game_score]
-        if any(x >=12 for x in sum_score_bet):
+        # Se os dois já forem ganhar o jogo com a aposta atual, other não pode mais aumentar 
+        min_sum_score_bet = min([(self.current_bet + score) for score in self.game_score])
+        if min_sum_score_bet >= 12:
             self.trucable[self.other_player] = False
         else:
             self.trucable[self.other_player] = True
@@ -378,11 +377,10 @@ def test_game():
     observation = truco.reset()
     done = False
     rewards = [0, 0]
-    switch = False
+    player1_reward = -1
 
     while not done:
-        if not switch:
-            print(
+        print(
                 f"Mão {truco.turn + 1}/3 - Placar do round: {truco.players[0].name} ({truco.round_score[0]} x {truco.round_score[1]}) {truco.players[1].name}"
             )
 
@@ -395,23 +393,30 @@ def test_game():
             f"Cartas do {current_player.name}: {[dict_deck[card] for card in current_player.cards]}"
         )
 
-        # Pede truco quando soma dos scores é 8
-        if sum(truco.game_score) == 8:
-            action = 3
-            observation, reward, done, info = truco.step(action)
-            if truco.current_bet == 4:
-                print(f"{current_player.name} pediu truco")
-            else:
-                print(f"{current_player.name} pediu {truco.current_bet}")
-            continue
-
         # Escolhe uma ação aleatória para o jogador atual (trocar pelo agente RL)
-        action = current_player.choose_action()
-        print(
-            f"Carta jogada pelo {current_player.name}: {dict_deck[current_player.cards[action]]}"
-        )
+        action = int(input())
+        if action not in [0, 1, 2]:
+            observation, reward, done, info = truco.step(action)
+            if action == 3:
+                if truco.current_bet == 4:
+                    print(f"{current_player.name} pediu truco")
+                else:
+                    print(f"{current_player.name} pediu {truco.current_bet}")
+            elif action == 4:
+                print(f"{current_player.name} aceitou")
+            else:
+                print(f"{current_player.name} recusou")
+            print(f"observation = {observation}")
+            print(f"info = {info}")
 
-        observation, reward, done, info = truco.step(action)
+        #action = current_player.choose_action()
+
+        else:
+            print(
+                f"Carta jogada pelo {current_player.name}: {dict_deck[current_player.cards[action]]}"
+            )
+
+            observation, reward, done, info = truco.step(action)
 
         # Distribui as recompensas
         player1_reward = reward if current_player.name == "Player 1" else -reward
@@ -425,7 +430,7 @@ def test_game():
             f"Recompensa obtida neste passo: {truco.players[0].name} = {player1_reward}; {truco.players[1].name} = {player2_reward}"
         )
 
-        if switch:
+        if player1_reward != 0:
             hand_winner = info["hand_winner"]
             if hand_winner == 2:
                 print("Mão empatada.")
@@ -437,8 +442,6 @@ def test_game():
             print(
                 f"Placar do jogo: {truco.players[0].name} ({truco.game_score[0]} x {truco.game_score[1]}) {truco.players[1].name}\n"
             )
-
-        switch = not (switch)
 
 if __name__ == "__main__":
     test_game()
