@@ -188,20 +188,17 @@ class TrucoMineiroEnv(gym.Env):
             raise ValueError(f"Invalid action. Player responded to a truco or raise that doesn't exist.")
         # Retira a necessidade de responder
         self.respond = False
-        # Se aceita aumenta a aposta
+        # Se aceita continua o jogo
         if action == 4:
             reward = 0
-            if self.current_bet == 6:
-                self.current_bet == 10
-            else:
-                self.current_bet += 2
-            # Reforça que current pode pedir truco e other não pode
-            self.trucable[self.current_player] = True
-            self.trucable[self.other_player] = False
             self._switch_players()
             done = False
-        # Se recusa, atualiza o placar e distribui as recompensas
+        # Se recusa, atualiza o aposta, placar e distribui as recompensas
         else:
+            if self.current_bet == 10:
+                self.current_bet = 6
+            else:
+                self.current_bet -= 2
             reward = -self.current_bet
             self.game_score[self.current_player] -= self.current_bet
             self.game_score[self.other_player] += self.current_bet
@@ -216,9 +213,21 @@ class TrucoMineiroEnv(gym.Env):
         # Quando não pode pedir truco
         if self.trucable[self.current_player] == False:
             raise ValueError(f"Invalid action. Player is not allowed to truco/raise.")
+        if self.current_bet >= 12:
+            raise ValueError(f"Invalid action. Current bet is maxed at {self.current_bet}.")
+        # Aumenta a aposta
+        if self.current_bet == 6:
+            self.current_bet = 10
+        else:
+            self.current_bet += 2
         # Current não pode mais pedir/aumentar truco
         self.trucable[self.current_player] = False
-        self.trucable[self.other_player] = True
+        # Se alguém já for ganhar o jogo com a aposta atual, other não pode mais aumentar 
+        sum_score_bet = [(self.current_bet + score) for score in self.game_score]
+        if any(x >=12 for x in sum_score_bet):
+            self.trucable[self.other_player] = False
+        else:
+            self.trucable[self.other_player] = True
         # Solicita resposta do other
         self.respond = True
         # Passa a vez
@@ -385,6 +394,16 @@ def test_game():
         print(
             f"Cartas do {current_player.name}: {[dict_deck[card] for card in current_player.cards]}"
         )
+
+        # Pede truco quando soma dos scores é 8
+        if sum(truco.game_score) == 8:
+            action = 3
+            observation, reward, done, info = truco.step(action)
+            if truco.current_bet == 4:
+                print(f"{current_player.name} pediu truco")
+            else:
+                print(f"{current_player.name} pediu {truco.current_bet}")
+            continue
 
         # Escolhe uma ação aleatória para o jogador atual (trocar pelo agente RL)
         action = current_player.choose_action()
