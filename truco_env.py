@@ -48,7 +48,7 @@ class TrucoAgent:
         action = random.randint(0, n_cards - 1)
         return action
 
-    def play_card(self, action, card_frequency):
+    def play_card(self, action):
         card_played = self.cards[action]
         self.cards[action] = 0  # Marca a carta como jogada
         return card_played
@@ -114,7 +114,7 @@ class TrucoMineiroEnv(gym.Env):
         self.first_hand_winner = 0
         self.hand_winner = 0
         # Frequência de cartas jogadas no round
-        self.card_frequency = 14 * [0]
+        self.card_frequency = np.array(14 * [0])
         # Mecânica de truco
         self.current_bet = 2
         self.trucable = [True, True] # Se é trucável/aumentável
@@ -155,7 +155,7 @@ class TrucoMineiroEnv(gym.Env):
             self.game_score = [0, 0]
         self.round_score = [0, 0]
         self.first_hand_winner = 0
-        self.card_frequency = 13 * [0]
+        self.card_frequency *= 0
         self.current_bet = 2
         self.trucable = [True, True]
         self.respond = False
