@@ -27,32 +27,58 @@ dict_deck = {
     0: "Carta indisponível",
 }
 
-
-class TrucoAgent:
+class TrucoPlayer:
     """
-    Classe do agente com ações default aleatórias
+    Superclasse para todos os jogadores
     """
-    
     def __init__(self, name):
         self.name = name
-        self.cards = []
+        self.type = None # LearningPlayer or NonLearningPlayer
 
-    def draw_cards(self, deck):
-        self.cards = np.sort(
-            [deck.pop(random.randint(0, len(deck) - 1)) for _ in range(3)]
-        )[::-1]
+class LearningPlayer(TrucoPlayer):
+    def __init__(self, name):
+        super().__init__(name)
+        self.type = LearningPlayer
 
-    def choose_action(self):
-        # Escolhe uma ação aleatória válida (uma carta para jogar)
-        n_cards = sum(1 for x in self.cards if x != 0)
-        action = random.randint(0, n_cards - 1)
+class NonLearningPlayer(TrucoPlayer):
+    def __init__(self, name):
+        super().__init__(name)
+        self.type = NonLearningPlayer
+
+    def choose_action(self, obs, valid_actions):
+        raise NotImplementedError
+
+class RandomBotPlayer(NonLearningPlayer):
+    """
+    Classe do jogador com ações aleatórias
+    """
+
+    def choose_action(self, obs, info):
+        return random.choice(info["valid_actions"])
+
+class NetworkBotPlayer(NonLearningPlayer):
+    """
+    Classe do jogador cuja estratégia é dada por uma rede neural
+    """
+
+    def __init__(self, name, network):
+        super().__init__(name)
+        self.network = network
+    
+    def choose_action(self, obs, valid_actions):
+        av = self.network(obs).detach()
+        action = valid_actions[np.argmax([av[0, valid_action].item() for valid_action in valid_actions])]
         return action
 
-    def play_card(self, action):
-        card_played = self.cards[action]
-        self.cards[action] = 0  # Marca a carta como jogada
-        return card_played
+class HumanPlayer(NonLearningPlayer):
+    """
+    Classe do jogador humano (recebe a ação inserida pelo usuário)
+    """
 
+    def choose_action(self, obs, valid_actions):
+        print(f"obs: {obs}")
+        print(f"valid_actions: {valid_actions}")
+        return int(input("Chosen action: "))
 
 # Ambiente
 """
@@ -66,7 +92,7 @@ class TrucoMineiroEnv(gym.Env):
     Ambiente truco mineiro 1v1 multi agentes
     """
 
-    def __init__(self):
+    def __init__(self, num_players, teams):
         # Inicializa o espaço de ação e observação
         # Espaço de ação
         #   0: jogar carta 0, 1: jogar carta 1, 2: jogar carta 2
@@ -104,11 +130,17 @@ class TrucoMineiroEnv(gym.Env):
         self.game_score = [0, 0]
         self.round_score = [0, 0]
         # Cria agentes
-        self.players = [TrucoAgent("Player 1"), TrucoAgent("Player 2")]
+        self.num_players = num_players
+        self.players_per_team = num_players // 2
+        self.teams = None
+        self.players = [None for _ in range(num_players)]
+        self.has_learning_player = None
+        self.set_players(teams)
+        self.cards = [[] for _ in range(num_players)]
         # Aleatoriza quem começa
-        self.round_starter = random.randint(0, 1)
-        self.current_player = self.round_starter
-        self.other_player = 1 - self.current_player
+        self.round_starter = random.randint(0, num_players - 1)
+        self.current_player_index = self.round_starter
+        self.other_player_index = 1 - self.current_player_index
         self.current_card = 0
         self.other_card = 0
         self.first_hand_winner = 0
@@ -119,8 +151,25 @@ class TrucoMineiroEnv(gym.Env):
         self.current_bet = 2
         self.trucable = [True, True] # Se é trucável/aumentável
         self.respond = False
+        self.round_ended = False
         # Inicializa cartas
         self.reset()
+    
+    def set_players(self, teams):
+        self.teams = teams
+        num_learning_players = 0
+        for i in range(self.players_per_team):
+            if teams[0][i].type == LearningPlayer: num_learning_players += 1
+            self.players[2 * i] = teams[0][i]
+            if teams[1][i].type == LearningPlayer: num_learning_players += 1
+            self.players[2 * i + 1] = teams[1][i]
+        
+        if num_learning_players == 0:
+            self.has_learning_player = False
+        elif num_learning_players == 1:
+            self.has_learning_player = True
+        else:
+            raise Exception("There cannot be more than 1 learning player!")
 
     def _create_deck(self):
         # Retorna uma lista embaralhada de cartas
@@ -140,14 +189,20 @@ class TrucoMineiroEnv(gym.Env):
         )
         random.shuffle(deck)
         return deck
-
+    
+    def _draw_cards(self):
+        for i in range(self.num_players):
+            self.cards[i] = np.sort(
+                [self.deck.pop(random.randint(0, len(self.deck) - 1)) for _ in range(3)]
+            )[::-1]
+    
     def reset(self, reset_score=True):
+        if self.players[0] == None: raise Exception("Players must be set before calling reset!")
         self.deck = self._create_deck()
-        for player in self.players:
-            player.draw_cards(self.deck)
+        self._draw_cards()
         self.round_starter = 1 - self.round_starter
-        self.current_player = self.round_starter
-        self.other_player = 1 - self.current_player
+        self.current_player_index = self.round_starter
+        self.other_player_index = 1 - self.current_player_index
         self.current_card = 0
         self.other_card = 0
         self.turn = 0
@@ -159,9 +214,30 @@ class TrucoMineiroEnv(gym.Env):
         self.current_bet = 2
         self.trucable = [True, True]
         self.respond = False
-        return self._get_obs()
-
+        self.round_ended = False
+        if self.has_learning_player and self.players[self.current_player_index].type == NonLearningPlayer:
+            self.handle_action(self.players[self.current_player_index].choose_action(self._get_obs(), self._get_info()))
+        return self._get_obs(), self._get_info()
+    
     def step(self, action):
+        if not self.has_learning_player: raise Exception("step method cannot be used without a learning player!")
+        # Processa a ação do agente
+        obs, reward, done, info = self.handle_action(action)
+        # Estimula e processa as ações dos demais jogadores (SUPORTE PARA APENAS 1v1 POR ENQUANTO)
+        while not info["round_ended"] and self.players[self.current_player_index].type == NonLearningPlayer:
+            obs, reward, done, info = self.handle_action(self.players[self.current_player_index].choose_action(obs, info))
+        if info["round_ended"]:
+            if self.players[self.current_player_index] == LearningPlayer:
+                reward = -reward
+            else:
+                info["victory"] = not info["victory"]
+        return obs, reward, done, info
+    
+    def handle_action(self, action):
+        # por ora está:
+        # obs e info relativos ao jogador depois do que executou a ação
+        # reward relativo a quem executou a ação
+
         # Quando um truco/aumento precisa ser respondido
         if self.respond == True and action in [0, 1, 2]:
             raise ValueError(f"Invalid action. Player needs to respond to truco/raise call.")
@@ -191,7 +267,6 @@ class TrucoMineiroEnv(gym.Env):
         # Se aceita continua o jogo
         if action == 4:
             reward = 0
-            self._switch_players()
             done = False
         # Se recusa, atualiza o aposta, placar e distribui as recompensas
         else:
@@ -200,9 +275,10 @@ class TrucoMineiroEnv(gym.Env):
             else:
                 self.current_bet -= 2
             reward = -self.current_bet
-            self.game_score[self.other_player] += self.current_bet
             done = any(x >= 12 for x in self.game_score)
-            self.reset(reset_score=False)
+            self.game_score[self.other_player_index] += self.current_bet
+            self.round_ended = True
+        self._switch_players()
         return self._get_obs(), reward, done, self._get_info()
 
     def handle_truco_call(self):
@@ -210,7 +286,7 @@ class TrucoMineiroEnv(gym.Env):
         Lógica para pedir truco ou aumentar aposta
         '''
         # Quando não pode pedir truco
-        if self.trucable[self.current_player] == False:
+        if self.trucable[self.current_player_index] == False:
             raise ValueError(f"Invalid action. Player is not allowed to truco/raise.")
         if self.current_bet >= 12:
             raise ValueError(f"Invalid action. Current bet is maxed at {self.current_bet}.")
@@ -220,13 +296,13 @@ class TrucoMineiroEnv(gym.Env):
         else:
             self.current_bet += 2
         # Current não pode mais pedir/aumentar truco
-        self.trucable[self.current_player] = False
+        self.trucable[self.current_player_index] = False
         # Se os dois já forem ganhar o jogo com a aposta atual, other não pode mais aumentar 
         min_sum_score_bet = min([(self.current_bet + score) for score in self.game_score])
         if min_sum_score_bet >= 12:
-            self.trucable[self.other_player] = False
+            self.trucable[self.other_player_index] = False
         else:
-            self.trucable[self.other_player] = True
+            self.trucable[self.other_player_index] = True
         # Solicita resposta do other
         self.respond = True
         # Passa a vez
@@ -239,31 +315,26 @@ class TrucoMineiroEnv(gym.Env):
         Lógica para jogar carta
         '''
         # Verifica se a ação é válida
-        n_cards = sum(1 for x in self.players[self.current_player].cards if x != 0)
+        n_cards = sum(1 for x in self.cards[self.current_player_index] if x != 0)
         possible_actions = range(0, n_cards)
         if action not in possible_actions:
             raise ValueError(f"Invalid action. Player tried to play an unavailable card.")
 
         # Executa a ação do jogador atual
-        card_played = self.players[self.current_player].play_card(action)
+        card_played = self.cards[self.current_player_index][action]
+        self.cards[self.current_player_index][action] = 0  # Marca a carta como jogada
         self.current_card = card_played
         self.card_frequency[card_played - 1] += 1
 
         # Sort na mão do player
-        self.players[self.current_player].cards = np.sort(
-            self.players[self.current_player].cards
+        self.cards[self.current_player_index] = np.sort(
+            self.cards[self.current_player_index]
         )[::-1]
 
-        # Se o outro jogador ainda não jogou, encerra o step
+        # Se o outro jogador ainda não jogou, encerra a chamada
         if self.other_card == 0:
             self._switch_players()
-            observation, reward, done, info = (
-                self._get_obs(),
-                0,
-                False,
-                self._get_info(),
-            )
-            return observation, reward, done, info
+            return self._get_obs(), 0, False, self._get_info()
 
         # Determina o vencedor da mão se houver
         self.hand_winner = self._determine_hand_winner(
@@ -289,9 +360,9 @@ class TrucoMineiroEnv(gym.Env):
         self.turn += 1
 
         # Determina a recompensa (0 para empates ou rodada inacabada, +1 vitória, -1 derrota)
-        if round_winner == self.current_player + 1:
+        if round_winner == self.current_player_index + 1:
             reward = self.current_bet
-        elif round_winner == self.other_player + 1:
+        elif round_winner == self.other_player_index + 1:
             reward = -self.current_bet
         else:
             reward = 0
@@ -299,55 +370,71 @@ class TrucoMineiroEnv(gym.Env):
         # Troca os jogadores de lugar se precisar (mantém em caso de empate, senão quem ganhou começa a próxima)
         self._switch_players()
         if self.hand_winner == 1:
-            self.current_player, self.other_player = 0, 1
+            self.current_player_index, self.other_player_index = 0, 1
         elif self.hand_winner == 2:
-            self.current_player, self.other_player = 1, 0
+            self.current_player_index, self.other_player_index = 1, 0
 
         done = any(x >= 12 for x in self.game_score)
 
         # Retorna a observação, a recompensa (-1, 0 ou 1) se a rodada acabou ou 0 se a rodada não acabou e a flag de rodada acabada
         if round_winner != 0:
-            self.reset(reset_score=False)
+            self.round_ended = True
 
         return self._get_obs(), reward, done, self._get_info()
+    
+    def play(self):
+        if self.has_learning_player: raise Exception("play method cannot be used with a learning player")
+        while True:
+            pass
 
     def _switch_players(self):
-        self.current_player, self.other_player = self.other_player, self.current_player
+        self.current_player_index, self.other_player_index = self.other_player_index, self.current_player_index
         self.current_card, self.other_card = self.other_card, self.current_card
 
     def _determine_hand_winner(self, card1, card2):
         # Determina quem vence a mão (1=Player 1 ganha; 2=Player 2 ganha; 3=empate)
         if card1 > card2:
-            return self.current_player + 1  # Current ganha
+            return self.current_player_index + 1  # Current ganha
         elif card2 > card1:
-            return self.other_player + 1  # Other jogador ganha
+            return self.other_player_index + 1  # Other jogador ganha
         return 3  # Empate
 
     def _get_obs(self):
         bet_dict = {2:0, 4:1, 6:2, 10:3, 12:4}
         return {
-            "current_player_cards": self.players[self.current_player].cards,
+            "current_player_cards": self.cards[self.current_player_index],
             "other_card": self.other_card,
             "first_hand_winner": self.first_hand_winner,
-            "current_player_score": self.game_score[self.current_player],
-            "other_player_score": self.game_score[self.other_player],
+            "current_player_score": self.game_score[self.current_player_index],
+            "other_player_score": self.game_score[self.other_player_index],
             "current_bet": bet_dict[self.current_bet],
-            "trucable": self.trucable[self.current_player],
+            "trucable": self.trucable[self.current_player_index],
             "respond": self.respond,
             "card_frequency": self.card_frequency,
         }
 
     def _get_info(self):
         return {
-            "current_player": self.current_player,
-            "player1_cards": self.players[0].cards,
-            "player2_cards": self.players[1].cards,
+            "current_player_cards": self.cards[self.current_player_index],
             "round_score": self.round_score,
             "game_score": self.game_score,
             "hand_winner": self.hand_winner - 1,
             "first_hand_winner": self.first_hand_winner,
             "current_bet_value": self.current_bet,
+            "round_ended": self.round_ended,
+            "valid_actions": self._determine_valid_actions(),
+            "victory": self.game_score[self.current_player_index] >= 12,
         }
+    
+    def _determine_valid_actions(self):
+        valid_actions = []
+        if self.respond: valid_actions += [4, 5]
+        else:
+            if self.cards[self.current_player_index][0] != 0: valid_actions += [0]
+            if self.cards[self.current_player_index][1] != 0: valid_actions += [1]
+            if self.cards[self.current_player_index][2] != 0: valid_actions += [2]
+            if self.trucable[self.current_player_index]: valid_actions += [3]
+        return valid_actions
 
     def _determine_round_winner(self):
         # Lógica para determinar o vencedor de uma rodada
@@ -359,15 +446,15 @@ class TrucoMineiroEnv(gym.Env):
                 return 0
             return self.hand_winner
         if (
-            self.first_hand_winner == self.current_player + 1
-            and self.hand_winner != self.other_player + 1
+            self.first_hand_winner == self.current_player_index + 1
+            and self.hand_winner != self.other_player_index + 1
         ):  # Current ganha primeira mão
-            return self.current_player + 1
+            return self.current_player_index + 1
         if (
-            self.first_hand_winner == self.other_player + 1
-            and self.hand_winner != self.current_player + 1
+            self.first_hand_winner == self.other_player_index + 1
+            and self.hand_winner != self.current_player_index + 1
         ):  # Other ganha primeira mão
-            return self.other_player + 1
+            return self.other_player_index + 1
         return 0  # Default
 
 
@@ -384,8 +471,8 @@ def test_game():
                 f"Mão {truco.turn + 1}/3 - Placar do round: {truco.players[0].name} ({truco.round_score[0]} x {truco.round_score[1]}) {truco.players[1].name}"
             )
 
-        current_player = truco.players[truco.current_player]
-        other_player = truco.players[truco.other_player]
+        current_player = truco.players[truco.current_player_index]
+        other_player = truco.players[truco.other_player_index]
 
         print(f"Vez do {current_player.name}")
         print(f"Observação: {observation}")
