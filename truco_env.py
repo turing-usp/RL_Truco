@@ -4,6 +4,8 @@ import gymnasium as gym
 from gymnasium import spaces
 import random
 
+from truco_players import LearningPlayer, NonLearningPlayer
+
 import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -26,59 +28,6 @@ dict_deck = {
     1: "4",
     0: "Carta indisponível",
 }
-
-class TrucoPlayer:
-    """
-    Superclasse para todos os jogadores
-    """
-    def __init__(self, name):
-        self.name = name
-        self.type = None # LearningPlayer or NonLearningPlayer
-
-class LearningPlayer(TrucoPlayer):
-    def __init__(self, name):
-        super().__init__(name)
-        self.type = LearningPlayer
-
-class NonLearningPlayer(TrucoPlayer):
-    def __init__(self, name):
-        super().__init__(name)
-        self.type = NonLearningPlayer
-
-    def choose_action(self, obs, valid_actions):
-        raise NotImplementedError
-
-class RandomBotPlayer(NonLearningPlayer):
-    """
-    Classe do jogador com ações aleatórias
-    """
-
-    def choose_action(self, obs, info):
-        return random.choice(info["valid_actions"])
-
-class NetworkBotPlayer(NonLearningPlayer):
-    """
-    Classe do jogador cuja estratégia é dada por uma rede neural
-    """
-
-    def __init__(self, name, network):
-        super().__init__(name)
-        self.network = network
-    
-    def choose_action(self, obs, valid_actions):
-        av = self.network(obs).detach()
-        action = valid_actions[np.argmax([av[0, valid_action].item() for valid_action in valid_actions])]
-        return action
-
-class HumanPlayer(NonLearningPlayer):
-    """
-    Classe do jogador humano (recebe a ação inserida pelo usuário)
-    """
-
-    def choose_action(self, obs, valid_actions):
-        print(f"obs: {obs}")
-        print(f"valid_actions: {valid_actions}")
-        return int(input("Chosen action: "))
 
 # Ambiente
 """
