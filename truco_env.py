@@ -80,7 +80,6 @@ class TrucoMineiroEnv(gym.Env):
         self.round_score = [0, 0]
         # Cria agentes
         self.num_players = num_players
-        self.players_per_team = num_players // 2
         self.teams = None
         self.players = [None for _ in range(num_players)]
         self.has_learning_player = None
@@ -107,7 +106,7 @@ class TrucoMineiroEnv(gym.Env):
     def set_players(self, teams):
         self.teams = teams
         num_learning_players = 0
-        for i in range(self.players_per_team):
+        for i in range(self.num_players//2):
             if teams[0][i].type == LearningPlayer: num_learning_players += 1
             self.players[2 * i] = teams[0][i]
             if teams[1][i].type == LearningPlayer: num_learning_players += 1
