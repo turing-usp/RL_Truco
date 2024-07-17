@@ -1,12 +1,49 @@
 # Imports
+
+import os
+
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
+from gymnasium.error import DependencyNotInstalled
 import random
 
 import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+from rlcard.utils.utils import init_standard_deck
+
+import base64
+import matplotlib
+import matplotlib.pyplot as plt
+from matplotlib import animation
+from IPython.display import HTML
+
+def display_video(frames):
+    # Adapted from: https://colab.research.google.com/github/deepmind/dm_control/blob/master/tutorial.ipynb
+    orig_backend = matplotlib.get_backend()
+    matplotlib.use('Agg')
+    fig, ax = plt.subplots(1, 1, figsize=(6, 5))
+    matplotlib.use(orig_backend)
+    ax.set_axis_off()
+    ax.set_aspect('equal')
+    ax.set_position([0, 0, 1, 1])
+    im = ax.imshow(frames[0])
+    def update(frame):
+        im.set_data(frame)
+        return [im]
+    anim = animation.FuncAnimation(fig=fig, func=update, frames=frames,
+                                   interval=100, blit=True, repeat=False)
+
+    gif_path = "animation.gif"
+    anim.save(gif_path, writer='pillow', fps=1)
+
+    with open(gif_path, 'rb') as f:
+        gif_data = f.read()
+    gif_base64 = base64.b64encode(gif_data).decode('ascii')
+
+    return HTML(f'<img src="data:image/gif;base64,{gif_base64}">')
 
 # Dicionário do deck (apenas usado para visualização se quiser e não internamente)
 dict_deck = {
@@ -32,7 +69,7 @@ class TrucoAgent:
     """
     Classe do agente com ações default aleatórias
     """
-    
+
     def __init__(self, name):
         self.name = name
         self.cards = []
@@ -40,7 +77,7 @@ class TrucoAgent:
     def draw_cards(self, deck):
         self.cards = np.sort(
             [deck.pop(random.randint(0, len(deck) - 1)) for _ in range(3)]
-        )[::-1]
+        )
 
     def choose_action(self):
         # Escolhe uma ação aleatória válida (uma carta para jogar)
@@ -50,7 +87,7 @@ class TrucoAgent:
 
     def play_card(self, action):
         card_played = self.cards[action]
-        self.cards[action] = 0  # Marca a carta como jogada
+        self.cards[action] = 'x'  # Marca a carta como jogada
         return card_played
 
 
@@ -98,6 +135,8 @@ class TrucoMineiroEnv(gym.Env):
         )
         # Cria o deck
         self.deck = self._create_deck()
+        # Cria a tabela de pontuações das cartas
+        self.map = self._map_cards()
         # Contador de mãos jogadas
         self.turn = 0
         # Placar [jogador1, jogador2]
@@ -109,8 +148,8 @@ class TrucoMineiroEnv(gym.Env):
         self.round_starter = random.randint(0, 1)
         self.current_player = self.round_starter
         self.other_player = 1 - self.current_player
-        self.current_card = 0
-        self.other_card = 0
+        self.current_card = 'x'
+        self.other_card = 'x'
         self.first_hand_winner = 0
         self.hand_winner = 0
         # Frequência de cartas jogadas no round
@@ -123,23 +162,42 @@ class TrucoMineiroEnv(gym.Env):
         self.reset()
 
     def _create_deck(self):
-        # Retorna uma lista embaralhada de cartas
-        # 4 de cada carta exceto manilhas (1), A (3), 7 (2) e 4 (3)
-        deck = (
-            [14, 13, 12, 11]
-            + [10] * 4
-            + [9] * 4
-            + [8] * 3
-            + [7] * 4
-            + [6] * 4
-            + [5] * 4
-            + [4] * 2
-            + [3] * 4
-            + [2] * 4
-            + [1] * 3
-        )
+       # Retorna uma lista embaralhada de cartas
+        suits = ['spades', 'hearts', 'diamonds', 'clubs']
+        ranks = ['ace', '2', '3', '4', '5', '6', '7', 'jack', 'queen', 'king']
+        deck = []
+        for suit in suits:
+            for rank in ranks:
+                deck.append(f'{suit}_{rank}')
         random.shuffle(deck)
         return deck
+
+    def _map_cards(self):
+        default_mapping = {
+            '3': 10,
+            '2': 9,
+            'ace': 8,
+            'king': 7,
+            'jack': 6,
+            'queen': 5,
+            '7': 4,
+            '6': 3,
+            '5': 2,
+            '4': 1
+        }
+
+        card_points_map = {
+            'x': 0, # carta já jogada
+            'clubs_4': 14,
+            'hearts_7': 13,
+            'spades_ace': 12,
+            'diamonds_7': 11
+        }
+        for card in self.deck:
+            if card not in card_points_map:
+                card_points_map[card] = default_mapping[card.split('_')[-1]]
+
+        return card_points_map
 
     def reset(self, reset_score=True):
         self.deck = self._create_deck()
@@ -148,8 +206,8 @@ class TrucoMineiroEnv(gym.Env):
         self.round_starter = 1 - self.round_starter
         self.current_player = self.round_starter
         self.other_player = 1 - self.current_player
-        self.current_card = 0
-        self.other_card = 0
+        self.current_card = 'x'
+        self.other_card = 'x'
         self.turn = 0
         if reset_score:
             self.game_score = [0, 0]
@@ -178,7 +236,7 @@ class TrucoMineiroEnv(gym.Env):
         raise ValueError(
             f"Invalid action. Action must be an integer between 0 and 5 inclusive."
         )
-    
+
     def handle_response(self, action):
         '''
         Lógica para responder a truco ou aumento de aposta
@@ -221,7 +279,7 @@ class TrucoMineiroEnv(gym.Env):
             self.current_bet += 2
         # Current não pode mais pedir/aumentar truco
         self.trucable[self.current_player] = False
-        # Se os dois já forem ganhar o jogo com a aposta atual, other não pode mais aumentar 
+        # Se os dois já forem ganhar o jogo com a aposta atual, other não pode mais aumentar
         min_sum_score_bet = min([(self.current_bet + score) for score in self.game_score])
         if min_sum_score_bet >= 12:
             self.trucable[self.other_player] = False
@@ -239,7 +297,7 @@ class TrucoMineiroEnv(gym.Env):
         Lógica para jogar carta
         '''
         # Verifica se a ação é válida
-        n_cards = sum(1 for x in self.players[self.current_player].cards if x != 0)
+        n_cards = sum(1 for x in self.players[self.current_player].cards if x != 'x')
         possible_actions = range(0, n_cards)
         if action not in possible_actions:
             raise ValueError(f"Invalid action. Player tried to play an unavailable card.")
@@ -247,15 +305,15 @@ class TrucoMineiroEnv(gym.Env):
         # Executa a ação do jogador atual
         card_played = self.players[self.current_player].play_card(action)
         self.current_card = card_played
-        self.card_frequency[card_played - 1] += 1
+        self.card_frequency[self.map[card_played] - 1] += 1
 
         # Sort na mão do player
         self.players[self.current_player].cards = np.sort(
             self.players[self.current_player].cards
-        )[::-1]
+        )
 
         # Se o outro jogador ainda não jogou, encerra o step
-        if self.other_card == 0:
+        if self.other_card == 'x':
             self._switch_players()
             observation, reward, done, info = (
                 self._get_obs(),
@@ -282,8 +340,8 @@ class TrucoMineiroEnv(gym.Env):
             self.first_hand_winner = self.hand_winner
 
         # Reseta as cartas jogadas
-        self.other_card = 0
-        self.current_card = 0
+        self.other_card = 'x'
+        self.current_card = 'x'
 
         # Avança o turno
         self.turn += 1
@@ -317,17 +375,17 @@ class TrucoMineiroEnv(gym.Env):
 
     def _determine_hand_winner(self, card1, card2):
         # Determina quem vence a mão (1=Player 1 ganha; 2=Player 2 ganha; 3=empate)
-        if card1 > card2:
+        if self.map[card1] > self.map[card2]:
             return self.current_player + 1  # Current ganha
-        elif card2 > card1:
+        elif self.map[card2] > self.map[card1]:
             return self.other_player + 1  # Other jogador ganha
         return 3  # Empate
 
     def _get_obs(self):
         bet_dict = {2:0, 4:1, 6:2, 10:3, 12:4}
         return {
-            "current_player_cards": self.players[self.current_player].cards,
-            "other_card": self.other_card,
+            "current_player_cards": [self.map[card] for card in self.players[self.current_player].cards],
+            "other_card": self.map[self.other_card],
             "first_hand_winner": self.first_hand_winner,
             "current_player_score": self.game_score[self.current_player],
             "other_player_score": self.game_score[self.other_player],
@@ -370,6 +428,225 @@ class TrucoMineiroEnv(gym.Env):
             return self.other_player + 1
         return 0  # Default
 
+    def render(self, render_mode="rgb_array"):
+        try:
+            import pygame
+        except ImportError:
+            raise DependencyNotInstalled(
+                "pygame is not installed, run `pip install pygame`"
+            )
+
+        observation = self._get_obs()
+        current_player_cards = self.players[self.current_player].cards
+        other_card = self.other_card
+        first_hand_winner = observation["first_hand_winner"]
+        score = f"{observation['current_player_score']} x {observation['other_player_score']}"
+        current_bet = observation["current_bet"]
+
+
+        num_players = len(self.players)
+        screen_width, screen_height = 900, 750
+        card_img_height = 141
+        card_img_width = 101
+        logo_width = 54
+        logo_height = 64
+        spacing = 50
+
+        bg_color = (7, 99, 36)
+        white = (255, 255, 255)
+        yellow = (255, 255, 51)
+
+        if not hasattr(self, "screen"):
+            pygame.init()
+            if self.render_mode == "human":
+                pygame.display.init()
+                self.screen = pygame.display.set_mode((screen_width, screen_height))
+            else:
+                pygame.font.init()
+                self.screen = pygame.Surface((screen_width, screen_height))
+
+        if not hasattr(self, "clock"):
+            self.clock = pygame.time.Clock()
+
+        self.screen.fill(bg_color)
+
+        def get_image(path):
+            cwd = os.path.dirname(__file__)
+            image = pygame.image.load(os.path.join(cwd, path))
+            return image
+
+        def get_font(path, size):
+            cwd = os.path.dirname(__file__)
+            font = pygame.font.Font(os.path.join(cwd, path), size)
+            return font
+
+        small_font = get_font(
+            os.path.join("font", "Roboto-Black.ttf"), 35
+        )
+
+        score_text = small_font.render(
+            f"Player's team {score} Opponent's team", True, white
+        )
+        score_text_rect = self.screen.blit(score_text, (screen_width // 2 - score_text.get_width() // 2, spacing // 4))
+
+        def scale_card_img(card_img, shape=(card_img_width, card_img_height)):
+            return pygame.transform.scale(card_img, shape)
+
+        table_logo = scale_card_img(
+            get_image(
+                os.path.join(
+                    "img",
+                    f"turing_logo.png",
+                )
+            ),
+            (logo_width, logo_height)
+        )
+        for idx in range(4):
+            self.screen.blit(
+                table_logo,
+                (
+                    (idx // 2) * screen_width + (1 - 2 * (idx // 2)) * spacing - logo_width // 2,
+                    (idx % 2) * screen_height + (1 - 2 * (idx % 2)) * spacing - logo_height // 2,
+                )
+            )
+
+        def calc_coord_x(num_cards, idx):
+            if num_cards == 3:
+                return screen_width // 2 - (3 - 2 * idx) * (card_img_width // 2) - (1 - idx) * spacing // 4
+            elif num_cards == 2:
+                return screen_width // 2 - (1 - idx) * (card_img_width) - (1 - 2 * idx) * spacing // 4
+            else:
+                return screen_width // 2 - card_img_width // 2
+
+        other_team_text = small_font.render(
+            "Other team:", True, white
+        )
+        other_team_text_rect = self.screen.blit(
+            other_team_text, (spacing, score_text_rect.bottom + card_img_height // 2 + spacing - other_team_text.get_height() // 2)
+            )
+
+        for idx in range(num_players):
+            # TODO: mudar para as cartas de todos do time adversário
+            if not self.other_card == 'x':
+                card_img = scale_card_img(
+                    get_image(
+                        os.path.join(
+                            "img",
+                            f"{self.other_card}.png",
+                        )
+                    )
+                )
+                self.screen.blit(
+                    card_img,
+                    (
+                        calc_coord_x(num_cards=num_players/2, idx=idx),
+                        score_text_rect.bottom + spacing,
+                    ),
+                )
+
+        first_round_title = small_font.render(
+            "First round:", True, white
+        )
+        first_round_title_rect = self.screen.blit(
+            first_round_title,
+            (
+                screen_width - spacing - first_round_title.get_width(),
+                score_text_rect.bottom + card_img_height // 2 + spacing - first_round_title.get_height()
+            )
+        )
+
+        first_round_str = "Loss" if first_hand_winner == 1 else "Win" if first_hand_winner == 2 else "Draw" if first_hand_winner == 3 else " "
+        first_round_status = small_font.render(
+            first_round_str, True, white
+        )
+        self.screen.blit(
+            first_round_status,
+            (
+                screen_width - spacing - (first_round_title.get_width() // 2 + first_round_status.get_width() // 2),
+                first_round_title_rect.bottom
+            )
+        )
+
+
+        team2_text = small_font.render(
+            "Player's team:", True, white
+        )
+        team2_text_rect = self.screen.blit(
+            team2_text, (spacing, other_team_text_rect.bottom + card_img_height + spacing - team2_text.get_height() // 2)
+            )
+
+        #for idx in range(num_players):
+            # TODO: mudar para as cartas do time
+
+
+        current_bet_title = small_font.render(
+            "Current bet:", True, white
+        )
+        current_bet_title_rect = self.screen.blit(
+            current_bet_title,
+            (
+                screen_width - spacing - current_bet_title.get_width(),
+                other_team_text_rect.bottom + card_img_height + spacing - current_bet_title.get_height()
+            )
+        )
+
+        current_bet_status = small_font.render(
+            f"{current_bet}", True, white
+        )
+        self.screen.blit(
+            current_bet_status,
+            (
+                screen_width - spacing - (current_bet_title.get_width() // 2 + current_bet_status.get_width() // 2),
+                current_bet_title_rect.bottom
+            )
+        )
+
+        log_text = small_font.render("P1 called TRUCO", True, yellow)
+        log_text_rect = self.screen.blit(
+            log_text, (screen_width - spacing - log_text.get_width(), team2_text_rect.bottom + 2.0 * spacing)
+        )
+
+        player_text = small_font.render("Player's hand", True, white)
+        self.screen.blit(
+            player_text, (spacing, log_text_rect.bottom + spacing)
+        )
+
+
+
+        num_cards = sum([1 for card in self.players[self.current_player].cards if card != 'x'])
+        for idx in range(num_cards):
+            card_img = scale_card_img(
+                get_image(
+                    os.path.join(
+                        "img",
+                        f"{self.players[self.current_player].cards[idx]}.png",
+                    )
+                )
+            )
+            self.screen.blit(
+                card_img,
+                (
+                    calc_coord_x(num_cards=num_cards, idx=idx),
+                    team2_text_rect.bottom + 3.75 * spacing,
+                ),
+            )
+
+        if render_mode == "human":
+            pygame.event.pump()
+            pygame.display.update()
+            self.clock.tick(self.metadata["render_fps"])
+        else:
+            return np.transpose(
+                np.array(pygame.surfarray.pixels3d(self.screen)), axes=(1, 0, 2)
+            )
+
+    def close(self):
+        if hasattr(self, "screen"):
+            import pygame
+
+            pygame.display.quit()
+            pygame.quit()
+
 
 def test_game():
     # Testes no ambiente
@@ -389,9 +666,13 @@ def test_game():
 
         print(f"Vez do {current_player.name}")
         print(f"Observação: {observation}")
+        # print(
+        #     f"Cartas do {current_player.name}: {[dict_deck[card] for card in current_player.cards]}"
+        # )
         print(
-            f"Cartas do {current_player.name}: {[dict_deck[card] for card in current_player.cards]}"
+            f"Cartas do {current_player.name}:"
         )
+        truco.print_hand_cards(current_player.cards)
 
         # Escolhe uma ação aleatória para o jogador atual (trocar pelo agente RL)
         action = int(input())
@@ -412,9 +693,13 @@ def test_game():
         #action = current_player.choose_action()
 
         else:
+            # print(
+            #     f"Carta jogada pelo {current_player.name}: {dict_deck[current_player.cards[action]]}"
+            # )
             print(
-                f"Carta jogada pelo {current_player.name}: {dict_deck[current_player.cards[action]]}"
+                f"Carta jogada pelo {current_player.name}:"
             )
+            truco.print_hand_cards(current_player.cards[action])
 
             observation, reward, done, info = truco.step(action)
 
