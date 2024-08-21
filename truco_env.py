@@ -6,38 +6,8 @@ import random
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-import base64
-import matplotlib
-import matplotlib.pyplot as plt
-from matplotlib import animation
-from IPython.display import HTML
 import os
 from gymnasium.error import DependencyNotInstalled
-
-def display_video(frames):
-    # Adapted from: https://colab.research.google.com/github/deepmind/dm_control/blob/master/tutorial.ipynb
-    orig_backend = matplotlib.get_backend()
-    matplotlib.use('Agg')
-    fig, ax = plt.subplots(1, 1, figsize=(6, 5))
-    matplotlib.use(orig_backend)
-    ax.set_axis_off()
-    ax.set_aspect('equal')
-    ax.set_position([0, 0, 1, 1])
-    im = ax.imshow(frames[0])
-    def update(frame):
-        im.set_data(frame)
-        return [im]
-    anim = animation.FuncAnimation(fig=fig, func=update, frames=frames,
-                                   interval=100, blit=True, repeat=False)
-
-    gif_path = "animation.gif"
-    anim.save(gif_path, writer='pillow', fps=1)
-
-    with open(gif_path, 'rb') as f:
-        gif_data = f.read()
-    gif_base64 = base64.b64encode(gif_data).decode('ascii')
-
-    return HTML(f'<img src="data:image/gif;base64,{gif_base64}">')
 
 # Dicionário do deck (apenas usado pra visualização se quiser e não internamente)
 dict_deck = {
@@ -66,6 +36,8 @@ class TrucoMineiroEnv(gym.Env):
         self.map = self._map_cards()
         # Contador de mãos jogadas
         self.turn = 0
+        # Placar 0=oponente, 1=agente
+        self.score = [0,0]
         # Aleatoriza quem começa (0=oponente, 1=agente)
         self.first_player = random.randint(0, 1)
         # Definindo o espaço de ação (0, 1, 2 representam as cartas na mão do agente)
@@ -151,8 +123,10 @@ class TrucoMineiroEnv(gym.Env):
         # Determina o vencedor da mão
         hand_winner = self._determine_hand_winner(self.opponent_card, player_card)
 
-        # Determina o vencedor da rodada, se existir
+        # Determina o vencedor da rodada, se existir e atualiza o placar
         round_winner = self._determine_round_winner(hand_winner)
+        if round_winner == 1 or round_winner == 3:
+            self.score[0 if round_winner == 1 else 1] += 1
 
         # Determina quem ganhou a primeira mão se estiver nela
         if self.turn == 0:
@@ -178,17 +152,24 @@ class TrucoMineiroEnv(gym.Env):
         self.agent_cards = np.sort(self.agent_cards)
 
         # Retorna a observação, a recompensa (-1, 0 ou 1) se a rodada acabou ou 0 se a rodada não acabou e a flag de rodada acabada
-        return (self.map[self.opponent_card], np.array([self.map[card] for card in self.agent_cards]), self.first_hand_winner), reward, round_winner != 0
+        observation = (self.map[self.opponent_card], np.array([self.map[card] for card in self.agent_cards]), self.first_hand_winner)
+        if round_winner != 0:
+            self.reset(reset_score=False)
+        done = False if 12 not in self.score else True
+        return {'observation' : observation, 'reward' : reward, 'done' : done}
 
-    def reset(self):
+    def reset(self, seed = None, reset_score = True):
         # Reseta o ambiente
+        super().reset(seed=seed)
         self.deck =  self._create_deck()
         self.turn = 0
+        if reset_score:
+            self.score = [0,0]
         self.first_player = random.randint(0, 1)
         self.opponent_card = 'x' if self.first_player == 1 else self.draw()
         self.agent_cards = np.sort([self.draw(), self.draw(), self.draw()])
         self.first_hand_winner = 0
-        return self.map[self.opponent_card], np.array([self.map[card] for card in self.agent_cards]), self.first_hand_winner
+        return {'observation' : (self.map[self.opponent_card], np.array([self.map[card] for card in self.agent_cards]), self.first_hand_winner)}
 
     def _determine_hand_winner(self, opponent_card, agent_card):
         # Lógica para determinar o vencedor de uma mão (1=oponente ganha 2=empate 3=agente ganha)
@@ -218,6 +199,7 @@ class TrucoMineiroEnv(gym.Env):
 
         agent_cards = self.agent_cards
         other_card = self.opponent_card
+        score_str = f"{self.score[1]} x {self.score[0]}"
         first_hand_winner = self.first_hand_winner
 
 
@@ -262,7 +244,7 @@ class TrucoMineiroEnv(gym.Env):
         )
 
         score_text = small_font.render(
-            f"Player's team x Opponent's team", True, white
+            f"Player's team {score_str} Opponent's team", True, white
         )
         score_text_rect = self.screen.blit(score_text, (screen_width // 2 - score_text.get_width() // 2, spacing // 4))
 
